@@ -1,0 +1,117 @@
+services:
+  # MQTT Broker - EMQX
+  emqx:
+    image: emqx/emqx:5.4.0
+    container_name: sort3-emqx
+    ports:
+      - "1883:1883"    # MQTT
+      - "8083:8083"    # MQTT WebSocket
+      - "8084:8084"    # MQTT WebSocket SSL
+      - "8883:8883"    # MQTT SSL
+      - "18083:18083"  # Dashboard
+    environment:
+      - EMQX_NAME=emqx
+      - EMQX_HOST=127.0.0.1
+      - EMQX_ALLOW_ANONYMOUS=true
+    volumes:
+      - emqx-data:/opt/emqx/data
+      - emqx-log:/opt/emqx/log
+    networks:
+      - sort3-network
+    healthcheck:
+      test: ["CMD", "emqx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # OPC UA Simulator - Simulates the SORT3 PLC
+  opcua-simulator:
+    build:
+      context: ./opcua-simulator
+      dockerfile: Dockerfile
+    container_name: sort3-opcua-simulator
+    ports:
+      - "4840:4840"    # OPC UA
+    environment:
+      - MQTT_BROKER=emqx
+      - MQTT_PORT=1883
+      - OPCUA_PORT=4840
+      - SIMULATION_INTERVAL=5
+    depends_on:
+      emqx:
+        condition: service_healthy
+    networks:
+      - sort3-network
+    restart: unless-stopped
+
+  # InfluxDB - Time series database
+  influxdb:
+    image: influxdb:2.7
+    container_name: sort3-influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=adminpassword123
+      - DOCKER_INFLUXDB_INIT_ORG=decospan
+      - DOCKER_INFLUXDB_INIT_BUCKET=sort3
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=sort3-super-secret-token
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+      - influxdb-config:/etc/influxdb2
+    networks:
+      - sort3-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Telegraf - Data collector (OPC UA -> InfluxDB)
+  telegraf:
+    image: telegraf:1.29
+    container_name: sort3-telegraf
+    depends_on:
+      influxdb:
+        condition: service_healthy
+      opcua-simulator:
+        condition: service_started
+    volumes:
+      - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+    networks:
+      - sort3-network
+    restart: unless-stopped
+
+  # Grafana - Visualization
+  grafana:
+    image: grafana/grafana:10.2.3
+    container_name: sort3-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - ./grafana/grafana.ini:/etc/grafana/grafana.ini
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    networks:
+      - sort3-network
+    restart: unless-stopped
+
+networks:
+  sort3-network:
+    driver: bridge
+
+volumes:
+  emqx-data:
+  emqx-log:
+  influxdb-data:
+  influxdb-config:
+  grafana-data:
