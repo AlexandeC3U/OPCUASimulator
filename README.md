@@ -59,6 +59,24 @@ docker-compose logs -f
 docker-compose down
 ```
 
+### Switching simulator mode
+
+- Start the Python OPC UA simulator (original behaviour, includes Telegraf):
+
+```powershell
+docker compose --profile python-sim up -d
+```
+
+- Start the Node-RED simulator (Node-RED provides OPC UA and writes to InfluxDB directly):
+
+```powershell
+docker compose --profile nodered-sim up -d
+```
+
+Notes:
+- The `python-sim` profile starts `opcua-simulator` and `telegraf` (Telegraf collects OPC UA and writes to InfluxDB).
+- The `nodered-sim` profile starts `nodered` (Node-RED flow implements the simulator and writes directly to InfluxDB); `telegraf` is not started in this profile.
+
 ### Access Points
 
 | Service | URL | Credentials |
@@ -130,8 +148,7 @@ mosquitto_pub -h localhost -t "menen/sort3/start_order" -m '{
    "po_qty":100,
    "belt_speed":100.0,
    "max_sheets":50,
-   "open_distance":10.0,
-   "speedbelt":20.0,
+   "open_distance":100.0,
    "stations":[
       {
          "active":true,
@@ -150,9 +167,9 @@ mosquitto_pub -h localhost -t "menen/sort3/start_order" -m '{
       {
          "active":true,
          "cutting":false,
-         "box3_material":"MacAndCheese",
+         "box3_material":"VENEER-OAK-2000",
          "tape":false,
-         "veneer_l":500.0
+         "veneer_l":2000.0
       }
    ]
 }'

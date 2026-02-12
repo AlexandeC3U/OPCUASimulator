@@ -10,6 +10,11 @@ venv/
 pip-log.txt
 pip-delete-this-directory.txt
 
+# Node-RED
+.npm
+node_modules/
+node-red/.config.*
+
 # IDE
 .idea/
 .vscode/

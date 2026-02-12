@@ -40,6 +40,8 @@ services:
     depends_on:
       emqx:
         condition: service_healthy
+    profiles:
+      - python-sim
     networks:
       - sort3-network
     restart: unless-stopped
@@ -79,6 +81,8 @@ services:
         condition: service_started
     volumes:
       - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+    profiles:
+      - python-sim
     networks:
       - sort3-network
     restart: unless-stopped
@@ -101,6 +105,29 @@ services:
     depends_on:
       influxdb:
         condition: service_healthy
+    networks:
+      - sort3-network
+    restart: unless-stopped
+
+  # Node-RED - visual workflow for MQTT -> Influx processing
+  nodered:
+    build:
+      context: ./node-red
+      dockerfile: Dockerfile
+    container_name: sort3-nodered
+    hostname: localhost
+    ports:
+      - "1880:1880"
+      - "53880:53880"
+    environment:
+      - TZ=UTC
+    volumes:
+      - ./node-red:/data
+    depends_on:
+      - emqx
+      - influxdb
+    profiles:
+      - nodered-sim
     networks:
       - sort3-network
     restart: unless-stopped

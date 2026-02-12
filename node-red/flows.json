@@ -1,0 +1,400 @@
+[
+    {
+        "id": "a3f6f372008b2a7c",
+        "type": "tab",
+        "label": "SORT3 Simulator",
+        "disabled": false,
+        "info": ""
+    },
+    {
+        "id": "opcuaClientEndpoint",
+        "type": "OpcUa-Endpoint",
+        "name": "Local OPCUA Server",
+        "endpoint": "opc.tcp://sort3-nodered:53880/UA/SimpleNodeRedServer",
+        "secpol": "None",
+        "secmode": "None",
+        "none": true,
+        "login": false,
+        "usercert": false,
+        "usercertificate": "",
+        "userprivatekey": ""
+    },
+    {
+        "id": "mqttBroker",
+        "type": "mqtt-broker",
+        "name": "emqx",
+        "broker": "emqx",
+        "port": "1883",
+        "clientid": "",
+        "usetls": false,
+        "compatmode": true,
+        "keepalive": "60",
+        "cleansession": true
+    },
+    {
+        "id": "155dbe537a39555b",
+        "type": "influxdb",
+        "hostname": "influxdb",
+        "port": "8086",
+        "protocol": "http",
+        "database": "sort3",
+        "name": "influxdb",
+        "usetls": false,
+        "tls": "",
+        "influxdbVersion": "2.0",
+        "url": "http://influxdb:8086",
+        "timeout": "",
+        "rejectUnauthorized": false
+    },
+    {
+        "id": "23464b44363e5bef",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-contrib-opcua": "0.2.348",
+            "node-red-contrib-influxdb": "0.7.0"
+        }
+    },
+    {
+        "id": "952ccc6376682226",
+        "type": "OpcUa-Server",
+        "z": "a3f6f372008b2a7c",
+        "port": "53880",
+        "name": "",
+        "endpoint": "UA/SimpleNodeRedServer",
+        "nodesetDir": "",
+        "autoAcceptUnknownCertificate": true,
+        "registerToDiscovery": true,
+        "constructDefaultAddressSpace": true,
+        "allowAnonymous": true,
+        "endpointNone": true,
+        "endpointSign": false,
+        "endpointSignEncrypt": false,
+        "endpointBasic128Rsa15": false,
+        "endpointBasic256": false,
+        "endpointBasic256Sha256": false,
+        "maxNodesPerBrowse": "",
+        "maxNodesPerHistoryReadData": "",
+        "maxNodesPerHistoryReadEvents": "",
+        "maxNodesPerHistoryUpdateData": "",
+        "maxNodesPerRead": "",
+        "maxNodesPerWrite": "",
+        "maxNodesPerMethodCall": "",
+        "maxNodesPerRegisterNodes": "",
+        "maxNodesPerNodeManagement": "",
+        "maxMonitoredItemsPerCall": "",
+        "maxNodesPerHistoryUpdateEvents": "",
+        "maxNodesPerTranslateBrowsePathsToNodeIds": "",
+        "maxConnectionsPerEndpoint": "",
+        "maxMessageSize": "",
+        "maxBufferSize": "",
+        "maxSessions": "",
+        "x": 1060,
+        "y": 100,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "71274f03d01add66",
+        "type": "inject",
+        "z": "a3f6f372008b2a7c",
+        "name": "Setup OPCUA once",
+        "props": [],
+        "repeat": "",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "3",
+        "topic": "",
+        "x": 190,
+        "y": 100,
+        "wires": [
+            [
+                "75c0a77c4c33d1cb"
+            ]
+        ]
+    },
+    {
+        "id": "75c0a77c4c33d1cb",
+        "type": "function",
+        "z": "a3f6f372008b2a7c",
+        "name": "Setup: get namespace index",
+        "func": "const NS_URI = \"http://decospan.com/sort3\";\nflow.set(\"OPCUA_NS_URI\", NS_URI);\n\n// STEP 1: REGISTER namespace (required!)\n// node-red-contrib-opcua expects namespace URI in msg.topic\nmsg.topic = NS_URI;\nmsg.payload = {\n    opcuaCommand: \"registerNamespace\"\n};\n\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 440,
+        "y": 100,
+        "wires": [
+            [
+                "e74e326d0b021d02"
+            ]
+        ]
+    },
+    {
+        "id": "e74e326d0b021d02",
+        "type": "function",
+        "z": "a3f6f372008b2a7c",
+        "name": "Setup: build address space",
+        "func": "const NS_URI = flow.get(\"OPCUA_NS_URI\");\n\n// already done\nif (flow.get(\"OPCUA_SETUP_DONE\")) return null;\n\nlet ns = flow.get(\"OPCUA_NS\");\n\n// ---------- PHASE 1 : GET INDEX ----------\nif (!ns) {\n\n    // detect namespace index from ANY return type\n    if (typeof msg.payload === \"number\") ns = msg.payload;\n    if (msg.topic === \"namespaceIndex\") ns = Number(msg.payload);\n    if (msg.payload && msg.payload.namespaceIndex !== undefined)\n        ns = Number(msg.payload.namespaceIndex);\n\n    if (!ns) {\n        return {\n            topic: NS_URI,\n            payload: { opcuaCommand: \"getNamespaceIndex\" }\n        };\n    }\n\n    flow.set(\"OPCUA_NS\", ns);\n\n    // STEP 2: CREATE FOLDER FIRST\n    return {\n        topic: `ns=${ns};s=sort3;browseName=sort3`,\n        payload: { opcuaCommand: \"addFolder\" }\n    };\n}\n\n\n// ---------- PHASE 2 : CREATE VARIABLES ----------\nif (!flow.get(\"OPCUA_FOLDER_CREATED\")) {\n\n    // first response after folder creation\n    flow.set(\"OPCUA_FOLDER_CREATED\", true);\n\n    let messages = [];\n\n    function defVal(type) {\n        if (type === \"String\") return \"\";\n        if (type === \"Boolean\") return \"false\";\n        return \"0\";\n    }\n\n    function add(name, type) {\n        messages.push({\n            topic: `ns=${ns};s=sort3.${name};datatype=${type};value=${defVal(type)}`,\n            payload: { opcuaCommand: \"addVariable\" }\n        });\n    }\n\n    // ===== TAGS =====\n    add('SRT_OBJT_NEW_VALUE', 'Boolean');\n    add('SRT_PLC_VALUE_PROCESSED', 'Boolean');\n    add('SRT_PO_ID', 'String');\n    add('SRT_PO_QTY', 'Int32');\n    add('ORDER_STATUS', 'Int32');\n\n    add('SRT_SPEEDBELTTRANSPORT', 'Double');\n    add('SRT_MAXSHEETSBOX', 'Double');\n    add('SRT_OPENBOXDISTNACE', 'Double');\n\n    for (let i = 1; i <= 6; i++) {\n        add(`SRT_${i}_ACTIVE`, 'Boolean');\n        add(`SRT_${i}_CUTTING`, 'Boolean');\n        add(`SRT_${i}_ITEMNAME`, 'String');\n        add(`SRT_${i}_TAPE`, 'Boolean');\n        add(`SRT_${i}_VENEER_L`, 'Double');\n        add(`SRT_${i}_QTY`, 'Int32');\n    }\n\n    add('OUT_BOXFULL', 'Boolean');\n    add('OUT_BOXNR', 'Int32');\n    add('OUT_LPN_ID', 'String');\n    add('OUT_LPN_QTY', 'Int32');\n    add('OUT_PLC_NEW_VALUE', 'Boolean');\n    add('OUT_PO_ID', 'String');\n\n    flow.set(\"OPCUA_SETUP_DONE\", true);\n    node.warn(\"OPCUA address space created\");\n\n    return [messages];\n}\n\nreturn null;\n",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 780,
+        "y": 100,
+        "wires": [
+            [
+                "952ccc6376682226"
+            ]
+        ]
+    },
+    {
+        "id": "2e6d9f016ffe27a0",
+        "type": "mqtt in",
+        "z": "a3f6f372008b2a7c",
+        "name": "start_order",
+        "topic": "menen/sort3/start_order",
+        "qos": "0",
+        "datatype": "auto",
+        "broker": "mqttBroker",
+        "inputs": 0,
+        "x": 170,
+        "y": 260,
+        "wires": [
+            [
+                "717d6028719f799e",
+                "988f05494fd87354"
+            ]
+        ]
+    },
+    {
+        "id": "64c61efab551fc31",
+        "type": "mqtt in",
+        "z": "a3f6f372008b2a7c",
+        "name": "stop_order",
+        "topic": "menen/sort3/stop_order",
+        "qos": "0",
+        "datatype": "auto",
+        "broker": "mqttBroker",
+        "inputs": 0,
+        "x": 170,
+        "y": 320,
+        "wires": [
+            [
+                "31807cc0175145e8"
+            ]
+        ]
+    },
+    {
+        "id": "d6481fe99e5733c6",
+        "type": "influxdb out",
+        "z": "a3f6f372008b2a7c",
+        "influxdb": "155dbe537a39555b",
+        "name": "Influx",
+        "measurement": "",
+        "precision": "s",
+        "retentionPolicy": "",
+        "database": "",
+        "retentionPolicyV18Flux": "",
+        "org": "decospan",
+        "bucket": "sort3",
+        "x": 650,
+        "y": 520,
+        "wires": []
+    },
+    {
+        "id": "16ab22a78e54b629",
+        "type": "inject",
+        "z": "a3f6f372008b2a7c",
+        "d": true,
+        "name": "tick 5s",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "5",
+        "crontab": "",
+        "once": false,
+        "onceDelay": "",
+        "topic": "",
+        "payload": "",
+        "payloadType": "str",
+        "x": 170,
+        "y": 380,
+        "wires": [
+            [
+                "d6cea390a6d141bd"
+            ]
+        ]
+    },
+    {
+        "id": "717d6028719f799e",
+        "type": "function",
+        "z": "a3f6f372008b2a7c",
+        "name": "Handle start",
+        "func": "const ns = flow.get(\"OPCUA_NS\");\nif (ns === undefined) {\n    // node.error(\"OPCUA namespace index not ready yet. Wait for setup to complete.\");\n    return null;\n}\n\n// datatype map (needed for OpcUa-Client writemultiple)\nconst dt = {\n    SRT_OBJT_NEW_VALUE: 'Boolean',\n    SRT_PLC_VALUE_PROCESSED: 'Boolean',\n    SRT_PO_ID: 'String',\n    SRT_PO_QTY: 'Int32',\n    ORDER_STATUS: 'Int32',\n    SRT_SPEEDBELTTRANSPORT: 'Double',\n    SRT_MAXSHEETSBOX: 'Double',\n    SRT_OPENBOXDISTNACE: 'Double',\n    OUT_PO_ID: 'String',\n    OUT_LPN_QTY: 'Int32',\n    OUT_BOXNR: 'Int32',\n    OUT_BOXFULL: 'Boolean',\n    OUT_PLC_NEW_VALUE: 'Boolean'\n};\nfor (let i = 1; i <= 6; i++) {\n    dt[`SRT_${i}_ACTIVE`] = 'Boolean';\n    dt[`SRT_${i}_QTY`] = 'Int32';\n}\n\nfunction write(name, value){\n    const datatype = dt[name] || 'String';\n    return {\n        topic: `ns=${ns};s=sort3.${name};datatype=${datatype}`,\n        payload: value\n    };\n}\n\nlet p = (typeof msg.payload === \"string\") ? JSON.parse(msg.payload) : msg.payload;\n\nlet po = p.production_order || p.po_id || \"\";\nlet qty = parseInt(p.quantity || p.po_qty || 0);\nlet maxSheets = parseFloat(p.max_sheets || 0);\nlet speed = parseFloat(p.belt_speed || p.speedbelt || 0);\nlet openDist = parseFloat(p.open_distance || p.openDistance || 0);\n\n// runtime state\nflow.set(\"order_active\", true);\nflow.set(\"current_order\", po);\nflow.set(\"max_sheets\", maxSheets);\nflow.set(\"box_quantities\",{1:0,2:0,3:0,4:0,5:0,6:0});\n\n// station config\nlet stationsPayload = p.stations || [];\nlet stationState = {};\nfor (let i = 1; i <= 6; i++) {\n    let st = stationsPayload[i-1] || {};\n    stationState[i] = { active: st.active !== false };\n}\nflow.set(\"stations\", stationState);\n\n// build writes\nlet msgs = [\n    write(\"SRT_PO_ID\",po),\n    write(\"SRT_PO_QTY\",qty),\n    write(\"ORDER_STATUS\",1),\n    write(\"SRT_OBJT_NEW_VALUE\",true),\n    write(\"SRT_SPEEDBELTTRANSPORT\",speed),\n    write(\"SRT_MAXSHEETSBOX\",maxSheets),\n    write(\"SRT_OPENBOXDISTNACE\",openDist),\n    write(\"OUT_PO_ID\",po),\n    write(\"OUT_LPN_QTY\",0),\n    write(\"OUT_BOXNR\",1),\n    write(\"OUT_BOXFULL\",false),\n    write(\"OUT_PLC_NEW_VALUE\",false)\n];\n\n// stations\nfor(let i=1;i<=6;i++){\n    msgs.push(write(`SRT_${i}_ACTIVE`,stationState[i].active));\n    msgs.push(write(`SRT_${i}_QTY`,0));\n}\n\nreturn [msgs];\n",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 410,
+        "y": 260,
+        "wires": [
+            [
+                "e051d221da8c7865",
+                "566ef29cdd015c05"
+            ]
+        ]
+    },
+    {
+        "id": "31807cc0175145e8",
+        "type": "function",
+        "z": "a3f6f372008b2a7c",
+        "name": "Handle stop",
+        "func": "const ns = flow.get(\"OPCUA_NS\");\nif (ns === undefined) {\n    node.error(\"OPCUA namespace index not ready yet. Wait for setup to complete.\");\n    return null;\n}\n\n// Map variable names to their OPC UA datatypes\nconst datatypes = {\n    SRT_PO_ID: 'String',\n    SRT_PO_QTY: 'Int32',\n    ORDER_STATUS: 'Int32',\n    SRT_OBJT_NEW_VALUE: 'Boolean',\n    OUT_PO_ID: 'String',\n    OUT_LPN_QTY: 'Int32',\n    OUT_PLC_NEW_VALUE: 'Boolean'\n};\nfor (let i = 1; i <= 6; i++) {\n    datatypes[`SRT_${i}_ACTIVE`] = 'Boolean';\n    datatypes[`SRT_${i}_QTY`] = 'Int32';\n}\n\nfunction setVar(name, value) {\n    let dt = datatypes[name] || 'String';\n    return { topic: `ns=${ns};s=sort3.${name};datatype=${dt}`, payload: value };\n}\n\nflow.set(\"order_active\", false);\n\nlet opcuaMsgs = [\n    setVar(\"ORDER_STATUS\", 0),\n    setVar(\"SRT_PO_ID\", \"\"),\n    setVar(\"SRT_PO_QTY\", 0),\n    setVar(\"SRT_OBJT_NEW_VALUE\", false),\n    setVar(\"OUT_PO_ID\", \"\"),\n    setVar(\"OUT_LPN_QTY\", 0),\n    setVar(\"OUT_PLC_NEW_VALUE\", false)\n];\n\n// Reset all stations\nfor (let i = 1; i <= 6; i++) {\n    opcuaMsgs.push(setVar(`SRT_${i}_ACTIVE`, false));\n    opcuaMsgs.push(setVar(`SRT_${i}_QTY`, 0));\n}\n\nreturn [opcuaMsgs];\n",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 410,
+        "y": 320,
+        "wires": [
+            [
+                "e051d221da8c7865"
+            ]
+        ]
+    },
+    {
+        "id": "d6cea390a6d141bd",
+        "type": "function",
+        "z": "a3f6f372008b2a7c",
+        "name": "Simulation tick",
+        "func": "/**\n * SORT3 simulation tick\n */\n\nconst ns = flow.get(\"OPCUA_NS\");\nif (ns === undefined) {\n    // Setup not done yet\n    return null;\n}\n\n// Map variable names to their OPC UA datatypes\nconst datatypes = {\n    OUT_BOXNR: 'Int32',\n    OUT_LPN_QTY: 'Int32',\n    OUT_LPN_ID: 'String',\n    OUT_PLC_NEW_VALUE: 'Boolean',\n    OUT_BOXFULL: 'Boolean'\n};\nfor (let i = 1; i <= 6; i++) {\n    datatypes[`SRT_${i}_QTY`] = 'Int32';\n}\n\nfunction setVar(name, value) {\n    let dt = datatypes[name] || 'String';\n    return { topic: `ns=${ns};s=sort3.${name};datatype=${dt}`, payload: value };\n}\n\n// Stop if no order active\nif (!flow.get(\"order_active\")) return null;\n\n// Load runtime state safely\nlet boxes = flow.get(\"box_quantities\") || { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };\nlet maxSheets = flow.get(\"max_sheets\") || 0;\nlet po = flow.get(\"current_order\") || \"\";\n\n// Determine active stations (if not stored yet assume all active)\nlet stations = flow.get(\"stations\") || {\n    1: { active: true }, 2: { active: true }, 3: { active: true },\n    4: { active: true }, 5: { active: true }, 6: { active: true }\n};\n\nlet active = [];\nfor (let i = 1; i <= 6; i++) {\n    if (stations[i] && stations[i].active) active.push(i);\n}\nif (active.length === 0) return null;\n\n// Pick random box\nlet sel = active[Math.floor(Math.random() * active.length)];\n\n// Increase quantity\nboxes[sel] = (boxes[sel] || 0) + 1;\nlet qty = boxes[sel];\n\n// Check full condition\nlet boxFull = (maxSheets > 0 && qty >= maxSheets);\n\n// Build LPN\nlet lpn = \"LPN-\" + po + \"-BOX\" + (\"00\" + sel).slice(-3);\n\n// Save state\nflow.set(\"box_quantities\", boxes);\n\n// OPCUA messages - with datatype\nlet opcuaMsgs = [\n    setVar(\"OUT_BOXNR\", sel),\n    setVar(\"OUT_LPN_QTY\", qty),\n    setVar(\"OUT_LPN_ID\", lpn),\n    setVar(\"OUT_PLC_NEW_VALUE\", true),\n    setVar(\"OUT_BOXFULL\", boxFull),\n    setVar(`SRT_${sel}_QTY`, qty)\n];\n\n// Reset PLC_NEW_VALUE pulse after 500ms\nsetTimeout(() => {\n    node.send([[setVar(\"OUT_PLC_NEW_VALUE\", false)], null]);\n}, 500);\n\n// If full -> reset that box after pulse\nif (boxFull) {\n    boxes[sel] = 0;\n    flow.set(\"box_quantities\", boxes);\n\n    setTimeout(() => {\n        node.send([[setVar(`SRT_${sel}_QTY`, 0)], null]);\n    }, 600);\n}\n\n// InfluxDB point\nlet influxMsg = {\n    payload: [{\n        measurement: \"veneer_stacked\",\n        fields: {\n            box: sel,\n            qty: qty,\n            box_full: boxFull ? 1 : 0\n        },\n        tags: {\n            po: po\n        }\n    }]\n};\n\nreturn [opcuaMsgs, influxMsg];\n",
+        "outputs": 2,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 410,
+        "y": 380,
+        "wires": [
+            [
+                "e051d221da8c7865"
+            ],
+            [
+                "d6481fe99e5733c6"
+            ]
+        ]
+    },
+    {
+        "id": "988f05494fd87354",
+        "type": "debug",
+        "z": "a3f6f372008b2a7c",
+        "name": "debug 1",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 360,
+        "y": 520,
+        "wires": []
+    },
+    {
+        "id": "e051d221da8c7865",
+        "type": "OpcUa-Client",
+        "z": "a3f6f372008b2a7c",
+        "endpoint": "opcuaClientEndpoint",
+        "action": "writemultiple",
+        "deadbandtype": "a",
+        "deadbandvalue": 1,
+        "time": 10,
+        "timeUnit": "s",
+        "certificate": "n",
+        "localfile": "",
+        "localkeyfile": "",
+        "securitymode": "None",
+        "securitypolicy": "None",
+        "useTransport": false,
+        "maxChunkCount": 1,
+        "maxMessageSize": 8192,
+        "receiveBufferSize": 8192,
+        "sendBufferSize": 8192,
+        "setstatusandtime": false,
+        "keepsessionalive": false,
+        "name": "Write to OPCUA",
+        "applicationName": "",
+        "applicationUri": "",
+        "x": 840,
+        "y": 320,
+        "wires": [
+            [],
+            [],
+            []
+        ]
+    },
+    {
+        "id": "566ef29cdd015c05",
+        "type": "debug",
+        "z": "a3f6f372008b2a7c",
+        "name": "debug 2",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 780,
+        "y": 400,
+        "wires": []
+    },
+    {
+        "id": "474a34f59f924a54",
+        "type": "inject",
+        "z": "a3f6f372008b2a7c",
+        "name": "",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 560,
+        "y": 180,
+        "wires": [
+            [
+                "e74e326d0b021d02"
+            ]
+        ]
+    }
+]

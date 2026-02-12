@@ -1,0 +1,10 @@
+{
+  "name": "sort3-node-red",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Node-RED dependencies for Sort3Sim",
+  "dependencies": {
+    "node-red-contrib-influxdb": "~0.7.0",
+    "node-red-contrib-opcua": "0.2.348"
+  }
+}
